@@ -8,11 +8,11 @@ import com.therohankumar.interfaces.ICommand
 import com.therohankumar.modules.AudioPlayerManager
 import com.therohankumar.modules.EmbedUtils
 import com.therohankumar.modules.GuildMusicManager
+import net.dv8tion.jda.api.Permission
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent
 import net.dv8tion.jda.api.interactions.commands.OptionType
 import net.dv8tion.jda.api.interactions.commands.build.Commands
 import net.dv8tion.jda.api.interactions.commands.build.SlashCommandData
-import java.net.URL
 
 class Play: ICommand {
     override val name = "play"
@@ -26,8 +26,8 @@ class Play: ICommand {
         }
         val musicManager = AudioPlayerManager.getMusicManager(event.guild!!.idLong)
         var query = event.interaction.getOption("query")!!.asString
-        if(musicManager.taskScheduler.textChannel === null) {
-            musicManager.taskScheduler.textChannel = event.guildChannel.asTextChannel()
+        if(musicManager.trackScheduler.textChannel === null) {
+            musicManager.trackScheduler.textChannel = event.guildChannel.asTextChannel()
         }
         if(ensureVoiceChannel(event)) {
             event.guild!!.audioManager.sendingHandler = musicManager.sendHandler
@@ -39,14 +39,38 @@ class Play: ICommand {
     private fun ensureVoiceChannel(event: SlashCommandInteractionEvent): Boolean {
         val ourVC = event.guild!!.selfMember.voiceState?.channel
         val theirVC = event.member!!.voiceState?.channel
+
+        // Check if user is in a voice channel
         if (ourVC === null && theirVC === null) {
             event.hook.sendMessageEmbeds(EmbedUtils.createErrorEmbed("Error", "You need to be in Voice Channel to use this command")).queue()
             return false
         }
+
+        // Check if bot and user are in different voice channels
         if(ourVC !== null && ourVC !== theirVC) {
-            event.hook.sendMessageEmbeds(EmbedUtils.createErrorEmbed("Error", "You need to be in same Voice Channel as me")).queue()
+            event.hook.sendMessageEmbeds(
+                EmbedUtils.createErrorEmbed(
+                    "Error",
+                    "You need to be in same Voice Channel as me"
+                )
+            ).queue()
             return false
         }
+
+        // Check for required permissions
+        val selfMember = event.guild!!.selfMember
+        val permissions = theirVC!!.getPermissionOverride(selfMember)?.allowed ?: selfMember.permissions
+
+        if (!permissions.contains(Permission.VOICE_CONNECT) || !permissions.contains(Permission.VOICE_SPEAK)) {
+            event.hook.sendMessageEmbeds(
+                EmbedUtils.createErrorEmbed(
+                    "Error",
+                    "I need permissions to connect and speak in the voice channel"
+                )
+            ).queue()
+            return false
+        }
+
         event.guild!!.audioManager.openAudioConnection(theirVC)
         return true
     }
@@ -59,7 +83,7 @@ class Play: ICommand {
     inner class Loader(private val event: SlashCommandInteractionEvent, private val musicManager: GuildMusicManager) : AudioLoadResultHandler {
         override fun trackLoaded(track: AudioTrack) {
             track.userData = event.user
-            musicManager.taskScheduler.queue(track)
+            musicManager.trackScheduler.queue(track)
             val embed = EmbedUtils.createAddedToQueueEmbed(
                 trackTitle = track.info.title,
                 trackUrl = track.info.uri,
@@ -77,7 +101,7 @@ class Play: ICommand {
                     // Handle single track from search
                     val track = playlist.tracks.first()
                     track.userData = event.user
-                    musicManager.taskScheduler.queue(track)
+                    musicManager.trackScheduler.queue(track)
                     val embed = EmbedUtils.createAddedToQueueEmbed(
                         trackTitle = track.info.title,
                         trackUrl = track.info.uri,
@@ -93,7 +117,7 @@ class Play: ICommand {
                     val tracksToAdd = playlist.tracks.take(100)  // Limit to 100 tracks
                     tracksToAdd.forEach { track ->
                         track.userData = event.user
-                        musicManager.taskScheduler.queue(track)
+                        musicManager.trackScheduler.queue(track)
                     }
                     val tracksInfo = tracksToAdd.map { track ->
                         Triple(track.info.title, track.info.uri, track.info.author)
